@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Microsoft.Data.Sqlite;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -96,22 +97,29 @@ namespace MailDownloader.Logic
         int port;
         private TcpListener server;
         private string path = "ipconfig.txt";
+        private string sqlPath = "users.sqlite";
         private Dictionary<ClientObject, State> clients;
         private Dictionary<string, State> macAddresses;
         private Thread th;
         private List<Thread> working_threads;
         public TcpServer()
         {
+            DbCreate();
+            Dictionary<string, int> users = DbGetUsers();
             clients = new Dictionary<ClientObject, State>();
             GetIp();
             macAddresses = new Dictionary<string, State>();
+            foreach(var i in users)
+            {
+                macAddresses.Add(i.Key, (State)i.Value);
+            }
             working_threads = new List<Thread>();
             server = new TcpListener(localAddr, port);
             try
             {
                 server.Start();
             }
-            catch(Exception ex)
+            catch (Exception ex)
             {
                 throw ex;
             }
@@ -128,7 +136,7 @@ namespace MailDownloader.Logic
                         working_threads.Add(clientThread);
                         clientThread.Start();
                     }
-                    catch(Exception ex)
+                    catch (Exception ex)
                     {
                         Logger.Log(ex.Message);
                     }
@@ -141,7 +149,7 @@ namespace MailDownloader.Logic
             server.Stop();
             Thread.Sleep(2000);
             th.Abort();
-            foreach(var i in working_threads)
+            foreach (var i in working_threads)
             {
                 i.Abort();
             }
@@ -187,6 +195,7 @@ namespace MailDownloader.Logic
                     case State.Blocked:
                         msg = "Deny";
                         macAddresses[macAddress] = st;
+                        DbChangeState(macAddress, (int)st);
                         break;
                     case State.Requesting:
                         {
@@ -194,6 +203,7 @@ namespace MailDownloader.Logic
                             {
                                 msg = "Deny";
                                 macAddresses[macAddress] = st;
+                                DbChangeState(macAddress, (int)st);
                             }
                             break;
                         }
@@ -204,22 +214,26 @@ namespace MailDownloader.Logic
                             {
                                 msg = "OK";
                                 macAddresses[macAddress] = st;
+                                DbChangeState(macAddress, (int)st);
                             }
                         }
                         break;
                     case State.Downloading:
                         msg = "OK";
                         macAddresses[macAddress] = st;
+                        DbChangeState(macAddress, (int)st);
                         break;
                     case State.Stopped:
                         msg = "OK";
                         macAddresses[macAddress] = st;
+                        DbChangeState(macAddress, (int)st);
                         break;
                 }
             }
             else
             {
                 macAddresses.Add(macAddress, State.Blocked);
+                DbAddUser(macAddress, 0);
                 msg = "Deny";
             }
             clients[caller] = macAddresses[macAddress];
@@ -250,7 +264,7 @@ namespace MailDownloader.Logic
                         if (IPAddress.TryParse(ip_s, out tmp))
                         {
                             int ptmp;
-                            if(int.TryParse(dcs_str[1], out ptmp))
+                            if (int.TryParse(dcs_str[1], out ptmp))
                             {
                                 localAddr = tmp;
                                 port = ptmp;
@@ -267,6 +281,59 @@ namespace MailDownloader.Logic
         public string GetAddress()
         {
             return localAddr.ToString() + ":" + port;
+        }
+        private void DbCreate()
+        {
+            if (!File.Exists(sqlPath))
+            {
+                SqliteConnection conn = new SqliteConnection("Data Source=" + sqlPath);
+                conn.Open();
+                SqliteCommand comm = conn.CreateCommand();
+                comm.CommandText = "CREATE TABLE Users(userMacAddress nvarchar(50), state int)";
+                comm.ExecuteNonQuery();
+                conn.Close();
+                conn.Dispose();
+            }
+        }
+        private void DbAddUser(string macAddress, int state)
+        {
+            using (var conn = new SqliteConnection("Data Source=" + sqlPath))
+            {
+                conn.Open();
+                SqliteCommand comm = conn.CreateCommand();
+                comm.CommandText = $"INSERT INTO Users(userMacAddress, state) VALUES('{macAddress}',{state})";
+                comm.ExecuteNonQuery();
+                conn.Close();
+            }
+        }
+        private void DbChangeState(string macAddress, int state)
+        {
+            using (var conn = new SqliteConnection("Data Source=" + sqlPath))
+            {
+                conn.Open();
+                SqliteCommand comm = conn.CreateCommand();
+                comm.CommandText = $"UPDATE Users SET state = {state} WHERE userMacAddress = '{macAddress}'";
+                comm.ExecuteNonQuery();
+                conn.Close();
+            }
+        }
+        private Dictionary<string, int> DbGetUsers()
+        {
+            Dictionary<string, int> users = new Dictionary<string, int>();
+            using (var conn = new SqliteConnection("Data Source=" + sqlPath))
+            {
+                conn.Open();
+                SqliteCommand comm = conn.CreateCommand();
+                comm.CommandText = $"SELECT * FROM Users";
+                SqliteDataReader reader =comm.ExecuteReader();
+                while(reader.Read())
+                {
+                    users.Add(reader.GetString(reader.GetOrdinal("userMacAddress")), reader.GetInt32(reader.GetOrdinal("state")));
+                }
+                reader.Close();
+                conn.Close();
+            }
+            return users;
         }
     }
 }
